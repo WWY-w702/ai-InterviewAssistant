@@ -33,7 +33,10 @@ class ScoringServiceTest {
                 scoringService.evaluateWithConfidence("什么是HashMap？", "HashMap是...", "后端开发");
 
         assertNotNull(result);
-        assertEquals(75, result.overall());
+        // 综合分不是直接取模型返回的 overall(75)，而是对 6 个维度去极值后取均值：
+        // 68,70,71,75,80,82 -> 去掉 68 和 82 -> (70+71+75+80)/4 = 74。
+        // 这样模型自报的 overall 与分项打分矛盾时，以分项为准。
+        assertEquals(74, result.overall());
         assertEquals("回答比较完整", result.comment());
         assertTrue(result.confidence() > 0);
         assertTrue(result.attempts() >= 1);
