@@ -436,7 +436,7 @@ Wave 8-9 清理与重构
 
 ---
 
-## 7. Batch 0 执行期间实测发现的计划外问题
+## 7. Batch 0 / 0.5 执行期间实测发现的计划外问题
 
 ### 7.1 【阻塞 G2】main 上测试套件本来就是红的
 
@@ -450,13 +450,22 @@ Wave 8-9 清理与重构
 | `EloRatingServiceTest` ×2 | Mockito 严格桩漂移 | `UnnecessaryStubbing` |
 | `InterviewServiceTest` ×2 | Mockito 严格桩漂移 | `PotentialStubbingProblem` |
 
-**新增 Batch 0.5 — `chore/green-test-baseline`**：把这 7 个失败处理掉，产出真正可用的绿基线。按关注点再拆：
-- `fix/jwt-expiry-boundary`：确认代码用 `>` 是否有意为之（1 秒宽限），还是测试该换成真正的过期 token
-- `fix/scoring-trim-average`：并入第 4 波
-- `chore/quarantine-context-loads-test`：`@SpringBootTest` 加 `@Disabled` + 注明原因，或补 `src/test/resources/application.yml` + Testcontainers
-- `chore/fix-strict-stub-drift`：修 EloRatingServiceTest / InterviewServiceTest 的桩
+**新增 Batch 0.5 — `chore/green-test-baseline`**：把这 7 个失败处理掉，产出真正可用的绿基线。
+
+**状态：已完成。** 7 个失败全部消除，实测 **Tests run: 55, Failures: 0, Errors: 0, Skipped: 1 → BUILD SUCCESS**。
+
+决策与落地（按关注点拆成 5 个独立分支，均已推送）：
+
+| 分支 | 决策 | 落地 |
+|---|---|---|
+| `chore/fix-test-drift` | 纯测试漂移，无需决策 | 删掉 2 处 `findQuestionDifficulty(null)` 无效 stub |
+| `chore/scoring-overall-test` | **保留**代码现状：综合分由维度均值算，不采信模型自报的 `overall` | 断言 `75 → 74` 并注明算法 |
+| `chore/quarantine-context-loads-test` | `@Disabled` + 注明原因 | **必须加在类上**，见下方 7.5 |
+| `fix/jwt-expiry-boundary` | 改代码为 `>=`（原 `>` 等于给 1 秒宽限） | 安全相关，单独成批 |
+| `fix/opening-question-category` | 当 bug 修：回退查询丢弃了用户选的分类 | 透传 `focus`/`difficulty`，顺带修好 2 个测试 |
 
 在 Batch 0.5 完成前，门禁降级为**「本批不得新增失败」**（与 7.1 表格逐项比对）。
+自 Batch 0.5 起，G2 恢复为**「必须全绿」**。
 
 ### 7.2 其他实测发现
 
@@ -506,4 +515,67 @@ $ ./scripts/verify/smoke.sh
 - `scripts/start-backend.sh`（新增）：加载 `.env` 后启动
 - `scripts/verify/smoke.sh`（新增）：8 项冒烟
 - `scripts/start-backend.ps1`：补 `.env` 加载
+
+### 7.4 【新发现的既有 bug】不传 difficulty 必然 500，且 DB 列与 summary 可能不一致
+
+Batch 0.5 冒烟时用最小请求体实测：
+
+```
+$ curl -X POST .../api/interviews/start -H "Authorization: Bearer $T" \
+    -H 'Content-Type: application/json' -d '{"direction":"backend"}'
+{"code":500,"message":"服务异常: PreparedStatementCallback; SQL [INSERT INTO interview_sessions (...)]
+ ]; Column 'difficulty' cannot be null","data":null}
+```
+
+根因在 `InterviewRepository.save()`（第 42-44 行）：它写入的是**原始请求字段** `request.difficulty()` / `request.focus()` / `request.style()` / `request.questionMode()`，
+而 `InterviewService.start()` 已经算好了带兜底与自适应 Elo 的 `difficulty` / `focus` / `style` / `mode`，那份结果**只进了 `response.summary()`，没进 DB**。
+
+两个后果：
+1. 客户端不传 `difficulty` → 撞 `NOT NULL` → 500。而 `start()` 明明兜底成了 `"标准"`。
+2. 即使传了，DB 列存的是客户端原值，`summary` 存的是服务端解析值。`randomMix` / `adaptiveDifficulty` 打开时两者必然分叉 —— 后续批次要新增的 `extractDifficulty(summary)` 读的是 summary，与 DB 列不是同一个真相来源。
+
+**已证明是既有问题**：`git diff main -- InterviewRepository.java InterviewStartRequest.java` 为空，与 main 逐字节相同；Batch 0.5 改动的 5 个文件不含这两个。
+
+**新增 Batch 2.3 — `fix/session-persist-resolved-fields`**：`save()` 改为写入解析后的值（需要把解析结果一起传进 `save()`，或让 `response` 携带这四个字段）。
+排在 Wave 2，因为它与 2.1/2.2 一样动接口签名，放一起改省一次冲突。**优先级建议提高**：这是"配了随机难度/自适应难度就存错数据"的静默数据损坏。
+
+### 7.5 【踩坑】`@Disabled` 加在方法上拦不住 `@SpringBootTest` 加载上下文
+
+`chore/quarantine-context-loads-test` 首次把 `@Disabled` 加在 `contextLoads()` 方法上，`javap` 确认注解已进字节码，但实测仍然报错、`Skipped: 0`：
+
+```
+[ERROR] PdfReaderBackendApplicationTests.contextLoads ? IllegalState Failed to load ApplicationContext
+[WARNING] Tests run: 1, Failures: 0, Errors: 0, Skipped: 1   # 改到类上之后
+```
+
+原因：`SpringExtension` 实现了 `TestInstancePostProcessor`，它的执行时机早于方法级 `ExecutionCondition`。
+所以上下文照样被拉起，测试仍因连不上库而失败。
+
+**结论**：需要隔离的 `@SpringBootTest` 必须把 `@Disabled` 加在**类**上。已写进该测试的注解说明里。
+
+### 7.6 Batch 0.5 绿灯证据
+
+```
+$ cd backend && mvn -B test
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0 -- in ...JwtServiceTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0 -- in ...EloRatingServiceTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0 -- in ...InterviewServiceTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0 -- in ...ScoringServiceTest
+[WARNING] Tests run: 1, Failures: 0, Errors: 0, Skipped: 1 -- in ...PdfReaderBackendApplicationTests
+[INFO] Results:
+[WARNING] Tests run: 55, Failures: 0, Errors: 0, Skipped: 1
+[INFO] BUILD SUCCESS
+```
+
+改动后回归冒烟（`fix/opening-question-category` 生效的直接证据 —— `focus` 已透传）：
+
+```
+无 token: /api/interviews/reports 401, /api/profile/overview 401, /api/pdf/anything 401
+带 token: /api/health 200, /api/profile/overview 200, /api/interviews/reports 200, /api/agent/sessions 200
+
+POST /api/interviews/start  {"direction":"backend","difficulty":"standard"}
+ -> 200  summary: "backend / standard / 综合能力 / 常规面试 / 即兴"      # 未传 focus，落到默认值
+POST /api/interviews/start  {"direction":"backend","difficulty":"standard","focus":"java"}
+ -> 200  summary: "backend / standard / java / 常规面试 / 即兴"          # focus 正确透传（修复前恒为「综合能力」）
+```
 
