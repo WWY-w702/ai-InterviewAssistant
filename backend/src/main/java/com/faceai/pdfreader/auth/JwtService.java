@@ -50,7 +50,8 @@ public class JwtService {
         }
         String payload = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
         long expiresAt = extractLong(payload, EXPIRES_PATTERN);
-        if (Instant.now().getEpochSecond() > expiresAt) {
+        // 用 >= 而不是 >：exp 秒本身即视为已过期。用 > 会给出最多 1 秒的额外有效期。
+        if (Instant.now().getEpochSecond() >= expiresAt) {
             throw new IllegalArgumentException("登录已过期，请重新登录");
         }
         return new AuthUser(
