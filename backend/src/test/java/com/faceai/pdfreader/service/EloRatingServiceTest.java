@@ -79,7 +79,8 @@ class EloRatingServiceTest {
     @Test
     void updateAfterQuestion_calculatesEloCorrectly() {
         when(eloRepository.findUserRating(1L, "后端开发")).thenReturn(Optional.of(1200.0));
-        when(eloRepository.findQuestionDifficulty(null)).thenReturn(Optional.of(1200.0));
+        // questionId 为 null 时 updateAfterQuestion 走短路分支，题目难度直接取 1200.0，
+        // 不会查库 —— 所以这里不能 stub findQuestionDifficulty，否则是无效 stub。
 
         double newElo = eloRatingService.updateAfterQuestion(1L, "session1", 1, null, 80, "后端开发");
 
@@ -96,7 +97,7 @@ class EloRatingServiceTest {
     @Test
     void updateAfterQuestion_decreasesElo_whenLowScore() {
         when(eloRepository.findUserRating(1L, "后端开发")).thenReturn(Optional.of(1200.0));
-        when(eloRepository.findQuestionDifficulty(null)).thenReturn(Optional.of(1200.0));
+        // 同上：questionId 为 null，题目难度走短路分支取 1200.0，无需 stub。
 
         double newElo = eloRatingService.updateAfterQuestion(1L, "session1", 1, null, 30, "后端开发");
 
