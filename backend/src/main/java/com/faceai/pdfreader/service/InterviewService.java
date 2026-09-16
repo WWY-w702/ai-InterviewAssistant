@@ -124,7 +124,8 @@ public class InterviewService {
         String candidateProfile = buildCandidateProfile(resumeText, jdText, direction);
 
         // 生成第一题（基于简历 + JD）
-        String firstQuestion = generateQuestion(resumeText, jdText, direction, style, new ArrayList<>(), 1);
+        String firstQuestion = generateQuestion(resumeText, jdText, direction, focus, difficulty, style,
+                new ArrayList<>(), 1);
 
         InterviewSessionResponse response = new InterviewSessionResponse(
                 sessionId, "READY", summary, firstQuestion,
@@ -410,7 +411,8 @@ public class InterviewService {
         }
     }
 
-    private String generateQuestion(String resumeText, String jdText, String direction, String style,
+    private String generateQuestion(String resumeText, String jdText, String direction, String focus,
+                                     String difficulty, String style,
                                      List<String> askedQuestions, int questionNo) {
         String prompt = buildQuestionPrompt(resumeText, jdText, direction + " / " + style, askedQuestions, questionNo, null);
         try {
@@ -422,7 +424,7 @@ public class InterviewService {
             // fallback
         }
         return interviewQuestionRepository
-                .findOpeningQuestion(direction, "综合能力", "标准")
+                .findOpeningQuestion(direction, focus, difficulty)
                 .map(InterviewQuestionRecord::questionText)
                 .orElse("请先用 1-2 分钟介绍一下你自己，并重点说明你和「%s」方向最相关的一段经历。".formatted(direction));
     }
@@ -496,6 +498,8 @@ public class InterviewService {
                 truncate(session.resumeText(), RESUME_TEXT_LIMIT),
                 truncate(session.jdText(), JD_TEXT_LIMIT),
                 extractDirection(session.summary()),
+                extractFocus(session.summary()),
+                extractDifficulty(session.summary()),
                 extractStyle(session.summary()),
                 asked,
                 questionNo
@@ -508,6 +512,8 @@ public class InterviewService {
                 truncate(session.resumeText(), RESUME_TEXT_LIMIT),
                 truncate(session.jdText(), JD_TEXT_LIMIT),
                 extractDirection(session.summary()),
+                extractFocus(session.summary()),
+                extractDifficulty(session.summary()),
                 extractStyle(session.summary()),
                 asked,
                 questionNo
@@ -735,6 +741,16 @@ public class InterviewService {
     private String extractStyle(String summary) {
         String[] parts = summary.split("/");
         return parts.length > 3 ? parts[3].trim() : "常规面试";
+    }
+
+    private String extractDifficulty(String summary) {
+        String[] parts = summary.split("/");
+        return parts.length > 1 ? parts[1].trim() : "标准";
+    }
+
+    private String extractFocus(String summary) {
+        String[] parts = summary.split("/");
+        return parts.length > 2 ? parts[2].trim() : "综合能力";
     }
 
     private int toInt(Object value, int defaultVal) {
